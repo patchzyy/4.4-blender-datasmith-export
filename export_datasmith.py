@@ -1,4 +1,5 @@
 # Copyright Andrés Botero 2019
+# Updated by patchzy 2025
 
 import bpy
 import idprop
@@ -961,6 +962,11 @@ def get_expression(field, exp_list, force_default=False):
 	return_exp = get_expression_inner(field, exp_list)
 	expression_log_prefix = prev_prefix
 
+	# Check if we got a valid expression
+	if return_exp is None:
+		log.warn(f"get_expression_inner returned None for field {field_path}")
+		return None
+
 	# if a color output is connected to a scalar input, average by using dot product
 	if field.type == 'VALUE':
 		other_output = field.links[0].from_socket
@@ -1129,12 +1135,16 @@ def get_expression_inner(field, exp_list):
 
 	if node.type == 'ADD_SHADER':
 		expressions = get_expression(node.inputs[0], exp_list)
-		assert expressions
+		if not expressions:
+			log.warn(f"ADD_SHADER node {node.name} has no valid input 0")
+			return None
 
 		expressions1 = get_expression(node.inputs[1], exp_list)
-		assert expressions1
+		if not expressions1:
+			log.warn(f"ADD_SHADER node {node.name} has no valid input 1")
+			return expressions  # Return the first expression if second is invalid
+		
 		for name, exp in expressions1.items():
-
 			if name in expressions:
 				n = Node("Add")
 				n.push(Node("0", expressions[name]))
@@ -1145,10 +1155,14 @@ def get_expression_inner(field, exp_list):
 		return expressions
 	if node.type == 'MIX_SHADER':
 		expressions = get_expression(node.inputs[1], exp_list)
-		assert expressions
+		if not expressions:
+			log.warn(f"MIX_SHADER node {node.name} has no valid input 1")
+			return None
 
 		expressions1 = get_expression(node.inputs[2], exp_list)
-		assert expressions1
+		if not expressions1:
+			log.warn(f"MIX_SHADER node {node.name} has no valid input 2")
+			return expressions  # Return the first expression if second is invalid
 
 		if ("Opacity" in expressions) or ("Opacity" in expressions1):
 			# if there is opacity in any, both should have opacity
@@ -1386,6 +1400,10 @@ def pbr_nodetree_material(material):
 	reverse_expressions = dict()
 
 	expressions = get_expression(surface_field, exp_list)
+	if expressions is None:
+		log.warn(f"Material {material.name} has no valid surface expression, using default material")
+		return pbr_default_material()
+	
 	for key, value in expressions.items():
 		n.push(Node(key, value))
 
@@ -1476,9 +1494,8 @@ def fill_umesh(umesh, bl_mesh):
 	bm.loops.layers.uv.verify()
 	bm.to_mesh(m)
 	bm.free()
-	# not sure if this is the best way to read normals
-	m.calc_normals_split()
-
+	# In modern Blender, normals are calculated automatically
+	# We can access them directly from the mesh data
 	loops = m.loops
 	num_loops = len(loops)
 
@@ -1503,7 +1520,14 @@ def fill_umesh(umesh, bl_mesh):
 	polygons.foreach_get("material_index", material_slots)
 	umesh.tris_material_slot = material_slots # [p.material_index for p in m.polygons]
 
-	smoothing_groups = m.calc_smooth_groups()[0];
+	# Handle smoothing groups - in modern Blender, we need to check polygon smooth shading
+	# For now, we'll create a simple smoothing group based on polygon smooth shading
+	smoothing_groups = []
+	for poly in m.polygons:
+		if poly.use_smooth:
+			smoothing_groups.append(1)
+		else:
+			smoothing_groups.append(0)
 	umesh.tris_smoothing_group = np.array(smoothing_groups, np.uint32)
 
 	vertices = m.vertices
