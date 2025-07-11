@@ -1,3 +1,6 @@
+This project has been forked to be updated for the newer versions of blender
+
+
 # Blender Datasmith Export
 
 Export your Blender scene to UE4 using the Datasmith format.
