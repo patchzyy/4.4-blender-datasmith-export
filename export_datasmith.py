@@ -926,6 +926,21 @@ def get_context():
 
 
 expression_log_prefix = ""
+def safe_get_input_expression(node, input_name, exp_list, default_value=None):
+	"""Safely get an input expression, returning a default if the input doesn't exist."""
+	if input_name in node.inputs:
+		return get_expression(node.inputs[input_name], exp_list)
+	elif default_value is not None:
+		# Handle different input types
+		if input_name == 'Base Color':
+			# Default gray color for Base Color
+			return {"expression": exp_color((0.8, 0.8, 0.8, 1.0), exp_list)}
+		else:
+			return {"expression": exp_scalar(default_value, exp_list)}
+	else:
+		log.warn(f"Input '{input_name}' not found on node {node.name} and no default provided")
+		return {"expression": exp_scalar(0.0, exp_list)}
+
 def get_expression(field, exp_list, force_default=False):
 	# this may return none for fields without default value
 	# most of the time blender doesn't have default value for vector
@@ -1017,30 +1032,39 @@ def get_expression_inner(field, exp_list):
 	bsdf = None
 	if node.type == 'BSDF_PRINCIPLED':
 		bsdf = {
-			"BaseColor": get_expression(node.inputs['Base Color'], exp_list),
-			"Metallic": get_expression(node.inputs['Metallic'], exp_list),
-			"Roughness": get_expression(node.inputs['Roughness'], exp_list),
-			"Specular": get_expression(node.inputs['Specular'], exp_list),
+			"BaseColor": safe_get_input_expression(node, 'Base Color', exp_list),
+			"Metallic": safe_get_input_expression(node, 'Metallic', exp_list, 0.0),
+			"Roughness": safe_get_input_expression(node, 'Roughness', exp_list, 0.5),
 		}
+		
+		# Handle specular input with fallbacks for different Blender versions
+		if 'Specular' in node.inputs:
+			bsdf["Specular"] = get_expression(node.inputs['Specular'], exp_list)
+		elif 'Specular IOR Level' in node.inputs:
+			bsdf["Specular"] = get_expression(node.inputs['Specular IOR Level'], exp_list)
+		else:
+			# Use default specular value if input doesn't exist
+			bsdf["Specular"] = {"expression": exp_scalar(0.5, exp_list)}
 
 		# only add opacity if transmission != 0
-		transmission_field = node.inputs['Transmission']
-		add_transmission = False
-		if len(transmission_field.links) != 0:
-			add_transmission = True
-		elif transmission_field.default_value != 0:
-			add_transmission = True
-		if add_transmission:
-			n = Node("OneMinus")
-			exp_transmission = get_expression(node.inputs['Transmission'], exp_list)
-			n.push(Node("0", exp_transmission))
-			exp_opacity = {"expression": exp_list.push(n)}
-			bsdf['Opacity'] = exp_opacity
+		if 'Transmission' in node.inputs:
+			transmission_field = node.inputs['Transmission']
+			add_transmission = False
+			if len(transmission_field.links) != 0:
+				add_transmission = True
+			elif transmission_field.default_value != 0:
+				add_transmission = True
+			if add_transmission:
+				n = Node("OneMinus")
+				exp_transmission = get_expression(node.inputs['Transmission'], exp_list)
+				n.push(Node("0", exp_transmission))
+				exp_opacity = {"expression": exp_list.push(n)}
+				bsdf['Opacity'] = exp_opacity
 	if node.type == 'EEVEE_SPECULAR':
 		log.warn("EEVEE_SPECULAR incomplete implementation")
 		bsdf = {
-			"BaseColor": get_expression(node.inputs['Base Color'], exp_list),
-			"Roughness": get_expression(node.inputs['Roughness'], exp_list),
+			"BaseColor": safe_get_input_expression(node, 'Base Color', exp_list),
+			"Roughness": safe_get_input_expression(node, 'Roughness', exp_list, 0.5),
 		}
 
 	elif node.type == 'BSDF_DIFFUSE':
